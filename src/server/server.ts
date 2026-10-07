@@ -11,9 +11,13 @@ const port = 6767;  // tocco personale :)
 
 const publicPath = path.join(__dirname, "..", "..", "public");
 
-app.use(express.static(publicPath));
 app.use(streamingRouter);
+app.use(express.static(publicPath));
 
-app.get(/(.*)/, (req: Request, res: Response) => { res.sendFile(path.join(publicPath, "index.html")); });
+app.get("/*path", (req: Request, res: Response) => {
+    res.sendFile(path.join(publicPath, "index.html"));
+});
 
-app.listen(port, () => { console.log(`Server avviato su http://localhost:${port}`); });
+app.listen(port, () => {
+    console.log(`Server avviato su http://localhost:${port}`);
+});
