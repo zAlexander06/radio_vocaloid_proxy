@@ -147,18 +147,18 @@ async function cercaCopertina(artista: string, titolo: string): Promise<string |
         const query = encodeURIComponent(`artist:"${artista}" track:"${titolo}"`);
         const res = await fetch(`https://api.deezer.com/search?q=${query}&limit=1`);
         if (res.ok) {
-            const data = await res.json();
+            const data: any = await res.json();
             copertina = data?.data?.[0]?.album?.cover_xl || data?.data?.[0]?.album?.cover_big || null;
         }
     } catch (e) { console.warn("Deezer fallito, passo a iTunes..."); }
 
-    // Itunes
+    // iTunes
     if (!copertina) {
         try {
             const term = encodeURIComponent(queryTesto);
             const res = await fetch(`https://itunes.apple.com/search?term=${term}&entity=song&attribute=songTerm&limit=1`);
             if (res.ok) {
-                const data = await res.json();
+                const data: any = await res.json();
                 const rawUrl = data?.results?.[0]?.artworkUrl100;
                 if (rawUrl) copertina = rawUrl.replace("100x100bb", "600x600bb");
             }
@@ -171,20 +171,20 @@ async function cercaCopertina(artista: string, titolo: string): Promise<string |
             const term = encodeURIComponent(queryTesto);
             const res = await fetch(`https://open.spotify.com/oembed?url=https://open.spotify.com/search/${term}`);
             if (res.ok) {
-                const data = await res.json();
+                const data: any = await res.json();
                 copertina = data?.thumbnail_url || null;
             }
         } catch (e) { console.warn("Spotify OEmbed non ha trovato copertine."); }
     }
 
-    // Soundcloud
+    // SoundCloud
     if (!copertina) {
         try {
             const term = encodeURIComponent(queryTesto);
             const targetUrl = `https://soundcloud.com/search?q=${term}`;
             const res = await fetch(`https://soundcloud.com/oembed?url=${encodeURIComponent(targetUrl)}&format=json`);
             if (res.ok) {
-                const data = await res.json();
+                const data: any = await res.json();
                 const rawUrl = data?.thumbnail_url;
                 if (rawUrl) copertina = rawUrl.replace("-large.", "-t500x500.");
             }
@@ -308,7 +308,7 @@ streamingRouter.get("/streaming_status", async (req: Request, res: Response) => 
 
     try {
         const response = await fetchConRetry(status_json_url, 3, 500);
-        const data = await response.json();
+        const data: any = await response.json();
 
         const sources = data?.icestats?.source;
         let source = Array.isArray(sources) ? sources[0] : sources;
@@ -324,7 +324,7 @@ streamingRouter.get("/streaming_status", async (req: Request, res: Response) => 
 
         const copertinaOriginale = await cercaCopertina(artista, titolo);
         const copertinaUrl = copertinaOriginale ? `/cover-proxy?u=${encodeURIComponent(copertinaOriginale)}` : null;
-        const responseData = { ...data, metaExt: { artista, titolo, copertinaUrl } };
+        const responseData = { ...(data || {}), metaExt: { artista, titolo, copertinaUrl } };
 
         cachedStatus = responseData;
         lastFetchTime = Date.now();
