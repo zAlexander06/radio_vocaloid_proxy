@@ -1,4 +1,16 @@
+# Dipendenze
 /node_modules
-/public/src
-/server
+
+# Impostazioni editor
 .vscode/
+.idea/
+
+# File di build generati (questi NON vanno su Git, li genera Cloudflare durante il deploy)
+/dist
+/public/app.js
+*.tsbuildinfo
+
+# Log ed errori
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
