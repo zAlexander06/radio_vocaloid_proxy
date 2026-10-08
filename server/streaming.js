@@ -122,7 +122,7 @@ streamingRouter.get("/cover-proxy", async (req, res) => {
         return res.status(502).send("Impossibile scaricare l'immagine");
     }
 });
-/* funzione cerca copertina */
+/* Ricerca copertine via API esterne */
 async function cercaCopertina(artista, titolo) {
     if (!artista || !titolo || artista.toLowerCase() === "in onda")
         return null;
@@ -134,20 +134,20 @@ async function cercaCopertina(artista, titolo) {
     // Deezer
     try {
         const query = encodeURIComponent(`artist:"${artista}" track:"${titolo}"`);
-        const res = await fetch(`https://api.deezer.com/search?q=${query}&limit=1`);
+        const res = await fetch(`https://api.deezer.com/search?q=${query}&limit=1`, { signal: AbortSignal.timeout(3000) });
         if (res.ok) {
             const data = await res.json();
             copertina = data?.data?.[0]?.album?.cover_xl || data?.data?.[0]?.album?.cover_big || null;
         }
     }
-    catch (e) {
+    catch {
         console.warn("Deezer fallito, passo a iTunes...");
     }
     // iTunes
     if (!copertina) {
         try {
             const term = encodeURIComponent(queryTesto);
-            const res = await fetch(`https://itunes.apple.com/search?term=${term}&entity=song&attribute=songTerm&limit=1`);
+            const res = await fetch(`https://itunes.apple.com/search?term=${term}&entity=song&attribute=songTerm&limit=1`, { signal: AbortSignal.timeout(3000) });
             if (res.ok) {
                 const data = await res.json();
                 const rawUrl = data?.results?.[0]?.artworkUrl100;
@@ -155,7 +155,7 @@ async function cercaCopertina(artista, titolo) {
                     copertina = rawUrl.replace("100x100bb", "600x600bb");
             }
         }
-        catch (e) {
+        catch {
             console.warn("iTunes fallito, passo a Spotify OEmbed...");
         }
     }
@@ -163,13 +163,13 @@ async function cercaCopertina(artista, titolo) {
     if (!copertina) {
         try {
             const term = encodeURIComponent(queryTesto);
-            const res = await fetch(`https://open.spotify.com/oembed?url=https://open.spotify.com/search/${term}`);
+            const res = await fetch(`https://open.spotify.com/oembed?url=https://open.spotify.com/search/${term}`, { signal: AbortSignal.timeout(3000) });
             if (res.ok) {
                 const data = await res.json();
                 copertina = data?.thumbnail_url || null;
             }
         }
-        catch (e) {
+        catch {
             console.warn("Spotify OEmbed non ha trovato copertine.");
         }
     }
@@ -178,7 +178,7 @@ async function cercaCopertina(artista, titolo) {
         try {
             const term = encodeURIComponent(queryTesto);
             const targetUrl = `https://soundcloud.com/search?q=${term}`;
-            const res = await fetch(`https://soundcloud.com/oembed?url=${encodeURIComponent(targetUrl)}&format=json`);
+            const res = await fetch(`https://soundcloud.com/oembed?url=${encodeURIComponent(targetUrl)}&format=json`, { signal: AbortSignal.timeout(3000) });
             if (res.ok) {
                 const data = await res.json();
                 const rawUrl = data?.thumbnail_url;
@@ -186,7 +186,7 @@ async function cercaCopertina(artista, titolo) {
                     copertina = rawUrl.replace("-large.", "-t500x500.");
             }
         }
-        catch (e) {
+        catch {
             console.warn("SoundCloud OEmbed non ha trovato copertine.");
         }
     }
@@ -198,27 +198,27 @@ async function cercaCopertina(artista, titolo) {
     cacheCopertine.set(cacheKey, copertina);
     return copertina;
 }
-/* ping al server stream */
+/* Request helper con gestione risoluzione DNS e Fallback IP per lo Status */
 async function fetchConRetry(urlStr, retries = 3, delayMs = 500) {
     let lastError = null;
     const targetUrl = new URL(urlStr);
-    let fetchUrl = urlStr;
-    const headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Host": targetUrl.hostname
-    };
+    const originalHost = targetUrl.hostname;
+    let targetIp = ip_stream;
     try {
-        const lookup = await dns.lookup(targetUrl.hostname);
-        targetUrl.hostname = lookup.address;
-        fetchUrl = targetUrl.toString();
+        const lookup = await dns.lookup(originalHost);
+        targetIp = lookup.address;
     }
     catch {
-        if (targetUrl.hostname === "play.isla.ovh") {
-            targetUrl.hostname = ip_stream;
-            fetchUrl = targetUrl.toString();
-        }
+        console.warn(`[Status Fetch] Impossibile risolvere DNS per ${originalHost}, uso IP di fallback:`, targetIp);
     }
+    // Ricostruiamo l'URL usando l'IP direttamente per evitare fallimenti fetch DNS
+    targetUrl.hostname = targetIp;
+    const fetchUrl = targetUrl.toString();
+    const headers = {
+        "Host": originalHost,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*"
+    };
     for (let i = 0; i < retries; i++) {
         try {
             const res = await fetch(fetchUrl, {
@@ -228,7 +228,7 @@ async function fetchConRetry(urlStr, retries = 3, delayMs = 500) {
             if (res.ok)
                 return res;
             await res.body?.cancel().catch(() => { });
-            lastError = new Error(`Status ${res.status}`);
+            lastError = new Error(`Status HTTP ${res.status}`);
         }
         catch (error) {
             lastError = error;
@@ -238,6 +238,7 @@ async function fetchConRetry(urlStr, retries = 3, delayMs = 500) {
     }
     throw lastError instanceof Error ? lastError : new Error("Gateway non raggiungibile");
 }
+/* Endpoint Stream Audio */
 streamingRouter.get("/streaming_audio", async (req, res) => {
     const parsedUrl = new URL(stream_url);
     const originalHost = parsedUrl.hostname;
@@ -248,7 +249,7 @@ streamingRouter.get("/streaming_audio", async (req, res) => {
         const lookup = await dns.lookup(originalHost);
         targetIp = lookup.address;
     }
-    catch (err) {
+    catch {
         console.warn("[Streaming] Impossibile risolvere DNS, uso IP di fallback:", targetIp);
     }
     const options = {
@@ -309,14 +310,22 @@ streamingRouter.get("/streaming_audio", async (req, res) => {
     });
     eseguiRichiesta();
 });
-streamingRouter.get("/streaming_status", async (req, res) => {
+/* Endpoint Status JSON */
+streamingRouter.get("/streaming_status", async (_req, res) => {
     res.setHeader("Content-Type", "application/json");
     const now = Date.now();
     if (cachedStatus && now - lastFetchTime < CACHE_DURATION_MS)
         return res.json(cachedStatus);
     try {
         const response = await fetchConRetry(status_json_url, 3, 500);
-        const data = await response.json();
+        const text = await response.text();
+        let data;
+        try {
+            data = JSON.parse(text);
+        }
+        catch {
+            throw new Error(`Risposta Icecast non valida o non in formato JSON: "${text.substring(0, 80)}..."`);
+        }
         const sources = data?.icestats?.source;
         let source = Array.isArray(sources) ? sources[0] : sources;
         let artista = source?.artist || "In onda";
@@ -334,10 +343,10 @@ streamingRouter.get("/streaming_status", async (req, res) => {
         return res.json(responseData);
     }
     catch (err) {
-        console.error("Errore status:", err.message || err);
+        console.error("[Status Error]:", err.message || err);
         if (cachedStatus)
             return res.json(cachedStatus);
-        return res.status(502).json({ error: "Sorgente status non disponibile" });
+        return res.status(502).json({ error: "Sorgente status non disponibile", details: err.message || err });
     }
 });
 //# sourceMappingURL=streaming.js.map
