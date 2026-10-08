@@ -7,6 +7,7 @@ import { IncomingMessage } from "http";
 export const streamingRouter = Router();
 
 const stream_url = "http://play.isla.ovh/vocaloplus";
+const ip_stream = "64.176.12.57";
 const status_json_url = "http://play.isla.ovh/status-json.xsl";
 
 let cachedStatus: unknown = null;
@@ -204,23 +205,44 @@ async function cercaCopertina(artista: string, titolo: string): Promise<string |
 
 /* ping al server stream */
 
-async function fetchConRetry(url: string, retries = 3, delayMs = 500): Promise<globalThis.Response> {
-    for (let i = 0; i < retries; i++) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 2000);
+async function fetchConRetry(urlStr: string, retries = 3, delayMs = 500): Promise<globalThis.Response> {
+    let lastError: unknown = null;
+    const targetUrl = new URL(urlStr);
 
+    let fetchUrl = urlStr;
+    const headers: Record<string, string> = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Host": targetUrl.hostname
+    };
+
+    try {
+        const lookup = await dns.lookup(targetUrl.hostname);
+        targetUrl.hostname = lookup.address;
+        fetchUrl = targetUrl.toString();
+    } catch {
+        if (targetUrl.hostname === "play.isla.ovh") {
+            targetUrl.hostname = ip_stream;
+            fetchUrl = targetUrl.toString();
+        }
+    }
+
+    for (let i = 0; i < retries; i++) {
         try {
-            const res = await fetch(url, { signal: controller.signal });
+            const res = await fetch(fetchUrl, {
+                signal: AbortSignal.timeout(5000),
+                headers
+            });
             if (res.ok) return res;
+            await res.body?.cancel().catch(() => { });
+            lastError = new Error(`Status ${res.status}`);
         } catch (error) {
-            if (i === retries - 1) throw error;
-        } finally {
-            clearTimeout(timer);
+            lastError = error;
         }
 
         if (i < retries - 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
-    throw new Error("Gateway non raggiungibile");
+    throw lastError instanceof Error ? lastError : new Error("Gateway non raggiungibile");
 }
 
 streamingRouter.get("/streaming_audio", async (req: Request, res: Response) => {
@@ -229,7 +251,7 @@ streamingRouter.get("/streaming_audio", async (req: Request, res: Response) => {
     const path = parsedUrl.pathname + parsedUrl.search;
     const port = parsedUrl.port ? parseInt(parsedUrl.port, 10) : 80;
 
-    let targetIp = "64.176.12.57";
+    let targetIp = ip_stream;
     try {
         const lookup = await dns.lookup(originalHost);
         targetIp = lookup.address;

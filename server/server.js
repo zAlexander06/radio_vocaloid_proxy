@@ -9,7 +9,7 @@ const port = 6767; // tocco personale :)
 const publicPath = path.join(__dirname, "..", "..", "public");
 app.use(streamingRouter);
 app.use(express.static(publicPath));
-app.get("/*path", (req, res) => {
+app.get(/(.*)/, (req, res) => {
     res.sendFile(path.join(publicPath, "index.html"));
 });
 app.listen(port, () => {

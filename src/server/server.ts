@@ -14,7 +14,7 @@ const publicPath = path.join(__dirname, "..", "..", "public");
 app.use(streamingRouter);
 app.use(express.static(publicPath));
 
-app.get("/*path", (req: Request, res: Response) => {
+app.get(/(.*)/, (req: Request, res: Response) => {
     res.sendFile(path.join(publicPath, "index.html"));
 });
 
