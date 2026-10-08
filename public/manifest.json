@@ -1,0 +1,44 @@
+{
+    "name": "Vocaloid Radio",
+    "short_name": "Anime Radio",
+    "description": "Radio Anime / Vocaloid",
+    "start_url": "/",
+    "scope": "/",
+    "display": "standalone",
+    "theme_color": "#2196f3",
+    "background_color": "#2196f3",
+    "orientation": "portrait-primary",
+    "icons": [
+        {
+            "src": "/assets/icon/icon-192x192.jpg",
+            "sizes": "192x192",
+            "type": "image/png"
+        },
+        {
+            "src": "/assets/icon/icon-512x512.jpg",
+            "sizes": "512x512",
+            "type": "image/png"
+        }
+    ],
+    "screenshots": [
+        {
+            "src": "/assets/screenshot/screenshot-desktop.png",
+            "sizes": "1919x922",
+            "type": "image/png",
+            "form_factor": "wide"
+        },
+        {
+            "src": "/assets/screenshot/screenshot-mobile.png",
+            "sizes": "412x844",
+            "type": "image/png",
+            "form_factor": "narrow"
+        }
+    ],
+    "prefer_related_applications": false,
+    "lang": "it",
+    "dir": "ltr",
+    "categories": [
+        "entertainment",
+        "lifestyle"
+    ]
+}

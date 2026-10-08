@@ -23,7 +23,7 @@ interface Brano {
 }
 
 const nome_stazione = "Vocaloid Radio";
-const copertina_default = "./img/default.jpg";
+const copertina_default = "./assets/default.jpg";
 
 let playing: boolean = false;
 let muted: boolean = false;
@@ -62,7 +62,9 @@ function svg_dom(): void {
     function inserisciSVGPuro(s: string, svg: SVGElement, m: "append" | "prepend"): void {
         const el = document.querySelector(s);
         if (!el || el.querySelector("svg")) return;
-        el[m](svg.cloneNode(true));
+        const clone = svg.cloneNode(true);
+        if (m === "append") el.appendChild(clone);
+        else el.insertBefore(clone, el.firstChild);
     }
 
     mappa_icone.forEach(([selector, svg, method]) => inserisciSVGPuro(selector, svg, method));
@@ -259,7 +261,7 @@ function pulisciTitolo(rawTitle?: string): { artista: string; titolo: string; ra
 
 async function fetchStreamStatus(): Promise<void> {
     try {
-        const response = await fetch("/streaming_status", { cache: "no-store", signal: AbortSignal.timeout(5000) });
+        const response = await fetch("/audio_metadata", { cache: "no-store", signal: AbortSignal.timeout(5000) });
         if (!response.ok) throw new Error(`Errore HTTP: ${response.status}`);
 
         const data: streamStatus = await response.json();
@@ -286,7 +288,7 @@ async function appRadio(): Promise<void> {
     svg_dom();
 
     const audioLiveStream = new Audio();
-    const streamUrl = "/streaming_audio";
+    const streamUrl = "/audio";
 
     const btnPlayPause = document.getElementById("play");
     const tracciaTitolo = document.getElementById("titolo") as HTMLElement | null;
@@ -312,9 +314,9 @@ async function appRadio(): Promise<void> {
             try {
                 isLoading = true;
 
-                const haGiaSrcValido = audioLiveStream.src && audioLiveStream.src.includes("/streaming_audio");
+                const haGiaSrcValido = audioLiveStream.src && audioLiveStream.src.includes("/audio");
                 if (!haGiaSrcValido) {
-                    audioLiveStream.src = `/streaming_audio?t=${Date.now()}`;
+                    audioLiveStream.src = `/audio?t=${Date.now()}`;
                     audioLiveStream.load();
                 }
 

@@ -462,8 +462,16 @@ input[type=range]:active::-moz-range-thumb {
 
 @media (min-width: 760px),
 (orientation: landscape) and (max-height: 540px) and (min-width: 560px) {
+    #github {
+        padding: 2px;
+    }
+
+    #github svg {
+        width: 24px;
+        height: 24px;
+    }
+
     .player {
-        /* la copertina segue l'altezza della finestra, senza superare il 46% della card */
         --cover: min(clamp(180px, calc(100dvh - 120px), 440px), 46%);
         width: min(1040px, 100%);
         padding: clamp(24px, 3.5vw, 40px);
@@ -526,5 +534,16 @@ input[type=range]:active::-moz-range-thumb {
     .playing .eq b {
         animation: none;
         transform: scaleY(.5);
+    }
+}
+
+@media (max-width: 560px) {
+    #github {
+        padding: 2px;
+    }
+
+    #github svg {
+        width: 24px;
+        height: 24px;
     }
 }

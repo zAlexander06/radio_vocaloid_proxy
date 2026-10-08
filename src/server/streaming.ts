@@ -249,7 +249,7 @@ async function fetchConRetry(urlStr: string, retries = 3, delayMs = 500): Promis
 
 /* Endpoint Stream Audio */
 
-streamingRouter.get("/streaming_audio", async (req: Request, res: Response) => {
+streamingRouter.get("/audio", async (req: Request, res: Response) => {
     const parsedUrl = new URL(stream_url);
     const originalHost = parsedUrl.hostname;
     const path = parsedUrl.pathname + parsedUrl.search;
@@ -328,7 +328,7 @@ streamingRouter.get("/streaming_audio", async (req: Request, res: Response) => {
 
 /* Endpoint Status JSON */
 
-streamingRouter.get("/streaming_status", async (_req: Request, res: Response) => {
+streamingRouter.get("/audio_metadata", async (_req: Request, res: Response) => {
     res.setHeader("Content-Type", "application/json");
 
     const now = Date.now();

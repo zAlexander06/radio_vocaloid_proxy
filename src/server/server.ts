@@ -1,4 +1,5 @@
 import express, { type Request, type Response } from "express";
+import cors from "cors";
 import path from "path";
 import { fileURLToPath } from "url";
 import { streamingRouter } from "./streaming.js";
@@ -11,6 +12,7 @@ const port = process.env.PORT || 6767;
 
 const publicPath = path.join(__dirname, "..", "..", "public");
 
+app.use(cors());
 app.use(streamingRouter);
 
 app.use(express.static(publicPath));
