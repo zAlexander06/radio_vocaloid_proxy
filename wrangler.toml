@@ -1,0 +1,2 @@
+name = "radio-vocaloid-proxy"
+compatibility_flags = [ "nodejs_compat" ]
