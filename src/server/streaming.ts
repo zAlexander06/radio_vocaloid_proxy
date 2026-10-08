@@ -1,10 +1,12 @@
 import { Router, Request, Response } from "express";
 import http from "http";
 import { pipeline } from "stream";
+import dns from "dns/promises";
 
 export const streamingRouter = Router();
 
 const stream_url = "http://play.isla.ovh/vocaloplus";
+const ip_stream = "64.176.12.57";
 const status_json_url = "http://play.isla.ovh/status-json.xsl";
 
 let cachedStatus: unknown = null;
@@ -30,8 +32,6 @@ const COVER_CACHE_TTL_MS = 60 * 60 * 1000;
 const COVER_CACHE_MAX = 100;
 const COVER_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
 
-const BROWSER_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
-
 type CoverEntry = { body: Buffer; type: string; expires: number };
 const coverCache = new Map<string, CoverEntry>();
 
@@ -40,7 +40,7 @@ function hostConsentito(host: string): boolean {
     return COVER_ALLOWED_DOMAINS.some((d) => h === d || h.endsWith("." + d));
 }
 
-// Segue i redirect a mano verificando l'host
+// Segue i redirect a mano, ricontrollando l'host a ogni passaggio.
 async function scaricaCopertina(start: URL): Promise<globalThis.Response> {
     let url = start;
     for (let hop = 0; hop <= 3; hop++) {
@@ -49,7 +49,7 @@ async function scaricaCopertina(start: URL): Promise<globalThis.Response> {
         const r = await fetch(url, {
             signal: AbortSignal.timeout(COVER_TIMEOUT_MS),
             redirect: "manual",
-            headers: { Accept: "image/*", "User-Agent": BROWSER_USER_AGENT },
+            headers: { Accept: "image/*", "User-Agent": "cover-proxy/1.0" },
         });
 
         if (r.status >= 300 && r.status < 400) {
@@ -89,8 +89,6 @@ function inviaCopertina(res: Response, e: CoverEntry) {
     res.setHeader("X-Content-Type-Options", "nosniff");
     return res.end(e.body);
 }
-
-/* Proxy Copertine */
 
 streamingRouter.get("/cover-proxy", async (req: Request, res: Response) => {
     const raw = req.query.u;
@@ -133,7 +131,7 @@ streamingRouter.get("/cover-proxy", async (req: Request, res: Response) => {
     }
 });
 
-/* Ricerca Copertine */
+/* Ricerca copertine via API esterne */
 
 async function cercaCopertina(artista: string, titolo: string): Promise<string | null> {
     if (!artista || !titolo || artista.toLowerCase() === "in onda") return null;
@@ -147,10 +145,7 @@ async function cercaCopertina(artista: string, titolo: string): Promise<string |
     // Deezer
     try {
         const query = encodeURIComponent(`artist:"${artista}" track:"${titolo}"`);
-        const res = await fetch(`https://api.deezer.com/search?q=${query}&limit=1`, {
-            signal: AbortSignal.timeout(3000),
-            headers: { "User-Agent": BROWSER_USER_AGENT }
-        });
+        const res = await fetch(`https://api.deezer.com/search?q=${query}&limit=1`, { signal: AbortSignal.timeout(3000) });
         if (res.ok) {
             const data: any = await res.json();
             copertina = data?.data?.[0]?.album?.cover_xl || data?.data?.[0]?.album?.cover_big || null;
@@ -161,10 +156,7 @@ async function cercaCopertina(artista: string, titolo: string): Promise<string |
     if (!copertina) {
         try {
             const term = encodeURIComponent(queryTesto);
-            const res = await fetch(`https://itunes.apple.com/search?term=${term}&entity=song&attribute=songTerm&limit=1`, {
-                signal: AbortSignal.timeout(3000),
-                headers: { "User-Agent": BROWSER_USER_AGENT }
-            });
+            const res = await fetch(`https://itunes.apple.com/search?term=${term}&entity=song&attribute=songTerm&limit=1`, { signal: AbortSignal.timeout(3000) });
             if (res.ok) {
                 const data: any = await res.json();
                 const rawUrl = data?.results?.[0]?.artworkUrl100;
@@ -177,10 +169,7 @@ async function cercaCopertina(artista: string, titolo: string): Promise<string |
     if (!copertina) {
         try {
             const term = encodeURIComponent(queryTesto);
-            const res = await fetch(`https://open.spotify.com/oembed?url=https://open.spotify.com/search/${term}`, {
-                signal: AbortSignal.timeout(3000),
-                headers: { "User-Agent": BROWSER_USER_AGENT }
-            });
+            const res = await fetch(`https://open.spotify.com/oembed?url=https://open.spotify.com/search/${term}`, { signal: AbortSignal.timeout(3000) });
             if (res.ok) {
                 const data: any = await res.json();
                 copertina = data?.thumbnail_url || null;
@@ -193,16 +182,15 @@ async function cercaCopertina(artista: string, titolo: string): Promise<string |
         try {
             const term = encodeURIComponent(queryTesto);
             const targetUrl = `https://soundcloud.com/search?q=${term}`;
-            const res = await fetch(`https://soundcloud.com/oembed?url=${encodeURIComponent(targetUrl)}&format=json`, {
-                signal: AbortSignal.timeout(3000),
-                headers: { "User-Agent": BROWSER_USER_AGENT }
-            });
+            const res = await fetch(`https://soundcloud.com/oembed?url=${encodeURIComponent(targetUrl)}&format=json`, { signal: AbortSignal.timeout(3000) });
             if (res.ok) {
                 const data: any = await res.json();
                 const rawUrl = data?.thumbnail_url;
                 if (rawUrl) copertina = rawUrl.replace("-large.", "-t500x500.");
             }
-        } catch { console.warn("SoundCloud OEmbed non ha trovato copertine."); }
+        } catch {
+            console.warn("SoundCloud OEmbed non ha trovato copertine.");
+        }
     }
 
     if (cacheCopertine.size >= MAX_SEARCH_CACHE_SIZE) {
@@ -214,20 +202,35 @@ async function cercaCopertina(artista: string, titolo: string): Promise<string |
     return copertina;
 }
 
-/* Fetch compatibile con Cloudflare */
+/* Request helper con gestione risoluzione DNS e Fallback IP per lo Status */
 
 async function fetchConRetry(urlStr: string, retries = 3, delayMs = 500): Promise<globalThis.Response> {
     let lastError: unknown = null;
+    const targetUrl = new URL(urlStr);
+    const originalHost = targetUrl.hostname;
+
+    let targetIp = ip_stream;
+    try {
+        const lookup = await dns.lookup(originalHost);
+        targetIp = lookup.address;
+    } catch {
+        console.warn(`[Status Fetch] Impossibile risolvere DNS per ${originalHost}, uso IP di fallback:`, targetIp);
+    }
+
+    // Ricostruiamo l'URL usando l'IP direttamente per evitare fallimenti fetch DNS
+    targetUrl.hostname = targetIp;
+    const fetchUrl = targetUrl.toString();
 
     const headers: Record<string, string> = {
-        "User-Agent": BROWSER_USER_AGENT,
+        "Host": originalHost,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*"
     };
 
     for (let i = 0; i < retries; i++) {
         try {
-            const res = await fetch(urlStr, {
-                signal: AbortSignal.timeout(6000),
+            const res = await fetch(fetchUrl, {
+                signal: AbortSignal.timeout(5000),
                 headers
             });
 
@@ -241,38 +244,48 @@ async function fetchConRetry(urlStr: string, retries = 3, delayMs = 500): Promis
 
         if (i < retries - 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
-    throw lastError instanceof Error ? lastError : new Error("Gateway o Cloudflare non raggiungibile");
+    throw lastError instanceof Error ? lastError : new Error("Gateway non raggiungibile");
 }
 
 /* Endpoint Stream Audio */
 
-streamingRouter.get("/streaming_audio", (req: Request, res: Response) => {
+streamingRouter.get("/streaming_audio", async (req: Request, res: Response) => {
     const parsedUrl = new URL(stream_url);
+    const originalHost = parsedUrl.hostname;
+    const path = parsedUrl.pathname + parsedUrl.search;
+    const port = parsedUrl.port ? parseInt(parsedUrl.port, 10) : 80;
+
+    let targetIp = ip_stream;
+    try {
+        const lookup = await dns.lookup(originalHost);
+        targetIp = lookup.address;
+    } catch {
+        console.warn("[Streaming] Impossibile risolvere DNS, uso IP di fallback:", targetIp);
+    }
 
     const options: http.RequestOptions = {
-        hostname: parsedUrl.hostname,
-        port: parsedUrl.port ? parseInt(parsedUrl.port, 10) : 80,
-        path: parsedUrl.pathname + parsedUrl.search,
+        hostname: targetIp,
+        port: port,
+        path: path,
         method: "GET",
         headers: {
-            "Host": parsedUrl.hostname,
-            "User-Agent": BROWSER_USER_AGENT,
+            "Host": originalHost,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "*/*",
             "Icy-MetaData": "0",
-            "Connection": "keep-alive"
+            "Connection": "close"
         }
     };
 
     let tentativi = 0;
     const maxTentativi = 2;
     let timerRetry: NodeJS.Timeout | null = null;
-    let activeProxyReq: http.ClientRequest | null = null;
 
     function eseguiRichiesta() {
         if (req.destroyed) return;
         tentativi++;
 
-        activeProxyReq = http.request(options, (streamRes: http.IncomingMessage) => {
+        const proxyReq = http.request(options, (streamRes: http.IncomingMessage) => {
             if (streamRes.statusCode !== 200) {
                 if (tentativi < maxTentativi && !req.destroyed) {
                     timerRetry = setTimeout(eseguiRichiesta, 500);
@@ -283,38 +296,31 @@ streamingRouter.get("/streaming_audio", (req: Request, res: Response) => {
             }
 
             const tipoContenuto = streamRes.headers["content-type"] || "audio/mpeg";
-
-            // Header critici per disabilitare il buffering di Cloudflare e Nginx
             res.setHeader("Content-Type", tipoContenuto);
-            res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate, no-transform");
-            res.setHeader("X-Accel-Buffering", "no");
+            res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
 
             pipeline(streamRes, res, (err) => {
-                if (err && !req.destroyed) console.error("Errore streaming:", err.message);
+                if (err && !req.destroyed) console.error("Errore nell'inoltro dello stream audio:", err.message);
                 streamRes.destroy();
-                activeProxyReq?.destroy();
+                proxyReq.destroy();
             });
         });
 
-        activeProxyReq.on("error", (err: any) => {
+        proxyReq.on("error", (err: any) => {
             console.error(`[Tentativo ${tentativi}/${maxTentativi}] Errore Icecast:`, err.code || err.message);
-            if (tentativi < maxTentativi && !req.destroyed && !res.headersSent) {
-                timerRetry = setTimeout(eseguiRichiesta, 1000);
-            } else if (!res.headersSent) {
-                res.status(502).send("Errore di connessione allo stream audio");
-            }
+            if (tentativi < maxTentativi && !req.destroyed && !res.headersSent) timerRetry = setTimeout(eseguiRichiesta, 1000);
+            else if (!res.headersSent) res.status(502).send("Errore di connessione allo stream audio");
         });
 
-        activeProxyReq.setTimeout(8000, () => {
-            activeProxyReq?.destroy(new Error("Timeout con il server Icecast"));
+        proxyReq.setTimeout(8000, () => {
+            proxyReq.destroy(new Error("Timeout di connessione con il server Icecast"));
         });
 
-        activeProxyReq.end();
+        proxyReq.end();
     }
 
     req.on("close", () => {
         if (timerRetry) clearTimeout(timerRetry);
-        activeProxyReq?.destroy();
     });
 
     eseguiRichiesta();
@@ -324,7 +330,6 @@ streamingRouter.get("/streaming_audio", (req: Request, res: Response) => {
 
 streamingRouter.get("/streaming_status", async (_req: Request, res: Response) => {
     res.setHeader("Content-Type", "application/json");
-    res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
 
     const now = Date.now();
     if (cachedStatus && now - lastFetchTime < CACHE_DURATION_MS) return res.json(cachedStatus);
@@ -337,7 +342,7 @@ streamingRouter.get("/streaming_status", async (_req: Request, res: Response) =>
         try {
             data = JSON.parse(text);
         } catch {
-            throw new Error(`Risposta Icecast non valida o bloccata da Cloudflare/WAF: "${text.substring(0, 80)}..."`);
+            throw new Error(`Risposta Icecast non valida o non in formato JSON: "${text.substring(0, 80)}..."`);
         }
 
         const sources = data?.icestats?.source;

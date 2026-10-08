@@ -7,7 +7,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const app = express();
-const port = 6767;  // tocco personale :)
+const port = 3000;  // tocco personale :)
 
 const publicPath = path.join(__dirname, "..", "..", "public");
 
