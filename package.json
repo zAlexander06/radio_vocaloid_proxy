@@ -22,8 +22,7 @@
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "hono": "^4.13.13",
-    "serverless-http": "^4.0.0",
-    "tsc": "^2.0.4"
+    "serverless-http": "^4.0.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",

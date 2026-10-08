@@ -1,6 +1,5 @@
 # Dipendenze
 /node_modules
-/old
 
 # Impostazioni editor
 .vscode/
