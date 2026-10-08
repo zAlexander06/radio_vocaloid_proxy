@@ -1,6 +1,6 @@
 {
   "name": "radio_vocaloid_proxy",
-  "version": "1.0.0",
+  "version": "1.0.5",
   "description": "",
   "type": "module",
   "main": "index.js",
@@ -17,9 +17,11 @@
   "license": "ISC",
   "dependencies": {
     "@cloudflare/workers-types": "^5.20261008.1",
+    "@hono/node-server": "^2.1.4",
     "concurrently": "^10.0.5",
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "hono": "^4.13.13",
     "serverless-http": "^4.0.0"
   },
   "devDependencies": {

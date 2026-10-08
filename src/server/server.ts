@@ -1,25 +1,24 @@
-import express, { Request, Response } from "express";
-import path from "node:path";
+import { Hono } from "hono";
 import { streamingRouter } from "./streaming.js";
 
-export const app = express();
+export const app = new Hono();
 
-app.use(streamingRouter);
+app.route("/", streamingRouter);
 
 const isLocal = process.env.NODE_ENV !== "production" && !process.env.CF_PAGES;
-console.log(`${(isLocal) ? "è in locale" : "è sulla rete"}`);
+console.log(isLocal ? "è in locale" : "è sulla rete");
 
 if (isLocal) {
-    const port = process.env.PORT || 6767;
-    const publicPath = path.resolve(process.cwd(), "public");
+    const { serve } = await import("@hono/node-server");
+    const { serveStatic } = await import("@hono/node-server/serve-static");
+    const port = Number(process.env.PORT) || 6767;
 
-    app.use(express.static(publicPath));
+    app.use("/*", serveStatic({ root: "./public" }));
+    app.get("*", serveStatic({ path: "./public/index.html" }));
 
-    app.get(/(.*)/, (req: Request, res: Response) => {
-        res.sendFile(path.join(publicPath, "index.html"));
-    });
-
-    app.listen(port, () => {
-        console.log(`Server locale avviato su http://localhost:${port}`);
-    });
+    serve({
+        fetch: app.fetch, port
+    }, (info) => { console.log(`Server locale avviato su http://localhost:${info.port}`); });
 }
+
+export default app;
