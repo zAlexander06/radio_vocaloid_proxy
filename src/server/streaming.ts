@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
-import http from "http";
-import { pipeline } from "stream";
-import dns from "dns/promises";
+import http from "node:http";
+import { pipeline } from "node:stream";
+import dns from "node:dns/promises";
 
 export const streamingRouter = Router();
 

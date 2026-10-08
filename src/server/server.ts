@@ -1,6 +1,6 @@
 import express, { Request, Response } from "express";
-import path from "path";
-import { fileURLToPath } from "url";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { streamingRouter } from "./streaming.js";
 
 const __filename = fileURLToPath(import.meta.url);
