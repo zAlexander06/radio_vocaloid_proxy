@@ -20,20 +20,6 @@
             "type": "image/png"
         }
     ],
-    "screenshots": [
-        {
-            "src": "/assets/screenshot/screenshot-desktop.png",
-            "sizes": "1919x922",
-            "type": "image/png",
-            "form_factor": "wide"
-        },
-        {
-            "src": "/assets/screenshot/screenshot-mobile.png",
-            "sizes": "412x844",
-            "type": "image/png",
-            "form_factor": "narrow"
-        }
-    ],
     "prefer_related_applications": false,
     "lang": "it",
     "dir": "ltr",
