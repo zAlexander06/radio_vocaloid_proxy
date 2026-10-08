@@ -1,11 +1,10 @@
 import serverless from "serverless-http";
-import { app } from "../src/server/server";
+import { app } from "../src/server/server.js";
 
 const handler = serverless(app);
 
-export const onRequest = async (context: any) => {
-    return handler(context.request, {
-        ...context.env,
-        waitUntil: context.waitUntil?.bind(context),
-    });
+export default {
+    async fetch(request: Request, env: any, ctx: any): Promise<Response> {
+        return handler(request, { ...env, waitUntil: ctx.waitUntil?.bind(ctx), }) as unknown as Response;
+    }
 };
