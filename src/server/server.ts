@@ -1,5 +1,5 @@
 import express, { Request, Response } from "express";
-import path from "path";
+import path from "node:path";
 import { streamingRouter } from "./streaming.js";
 
 export const app = express();
