@@ -1,4 +1,8 @@
-name = "radio-vocaloid"
-pages_build_output_dir = "public"
+name = "radio_vocaloid_proxy"
 compatibility_date = "2024-09-23"
 compatibility_flags = [ "nodejs_compat" ]
+
+main = "functions/[[path]].ts"
+
+[assets]
+directory = "./public"
