@@ -1,8 +1,12 @@
-import { Hono } from "hono";
+import { Router, Request, Response } from "express";
+import http from "http";
+import { pipeline } from "stream";
+import dns from "dns/promises";
 
-export const streamingRouter = new Hono();
+export const streamingRouter = Router();
 
 const stream_url = "http://play.isla.ovh/vocaloplus";
+const ip_stream = "64.176.12.57";
 const status_json_url = "http://play.isla.ovh/status-json.xsl";
 
 let cachedStatus: unknown = null;
@@ -28,7 +32,7 @@ const COVER_CACHE_TTL_MS = 60 * 60 * 1000;
 const COVER_CACHE_MAX = 100;
 const COVER_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif"]);
 
-type CoverEntry = { body: Uint8Array; type: string; expires: number };
+type CoverEntry = { body: Buffer; type: string; expires: number };
 const coverCache = new Map<string, CoverEntry>();
 
 function hostConsentito(host: string): boolean {
@@ -42,7 +46,7 @@ async function scaricaCopertina(start: URL): Promise<globalThis.Response> {
     for (let hop = 0; hop <= 3; hop++) {
         if (url.protocol !== "https:" || !hostConsentito(url.hostname)) throw new Error("Host non consentito");
 
-        const r = await fetch(url.toString(), {
+        const r = await fetch(url, {
             signal: AbortSignal.timeout(COVER_TIMEOUT_MS),
             redirect: "manual",
             headers: { Accept: "image/*", "User-Agent": "cover-proxy/1.0" },
@@ -59,7 +63,7 @@ async function scaricaCopertina(start: URL): Promise<globalThis.Response> {
     throw new Error("Troppi redirect");
 }
 
-async function leggiConLimite(r: globalThis.Response, limite: number): Promise<Uint8Array | null> {
+async function leggiConLimite(r: globalThis.Response, limite: number): Promise<Buffer | null> {
     if (!r.body) return null;
     const reader = r.body.getReader();
     const chunks: Uint8Array[] = [];
@@ -75,55 +79,43 @@ async function leggiConLimite(r: globalThis.Response, limite: number): Promise<U
         }
         chunks.push(value);
     }
-
-    const merged = new Uint8Array(totale);
-    let offset = 0;
-    for (const chunk of chunks) {
-        merged.set(chunk, offset);
-        offset += chunk.length;
-    }
-    return merged;
+    return Buffer.concat(chunks);
 }
 
-/* Endpoint Proxy Copertine */
+function inviaCopertina(res: Response, e: CoverEntry) {
+    res.setHeader("Content-Type", e.type);
+    res.setHeader("Content-Length", e.body.length);
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    return res.end(e.body);
+}
 
-streamingRouter.get("/cover-proxy", async (c) => {
-    const raw = c.req.query("u");
-    if (typeof raw !== "string" || raw.length > 2048) return c.text("Parametro 'u' non valido", 400);
+streamingRouter.get("/cover-proxy", async (req: Request, res: Response) => {
+    const raw = req.query.u;
+    if (typeof raw !== "string" || raw.length > 2048) return res.status(400).send("Parametro 'u' non valido");
 
     let url: URL;
-    try { url = new URL(raw); } catch { return c.text("URL non valido", 400); }
+    try { url = new URL(raw); } catch { return res.status(400).send("URL non valido"); }
 
-    if (url.protocol !== "https:" || !hostConsentito(url.hostname)) return c.text("Host non autorizzato", 403);
+    if (url.protocol !== "https:" || !hostConsentito(url.hostname)) return res.status(403).send("Host non autorizzato");
 
     const key = url.toString();
     const hit = coverCache.get(key);
-    if (hit && hit.expires > Date.now()) {
-        const body = new ArrayBuffer(hit.body.byteLength);
-        new Uint8Array(body).set(hit.body);
-        return new Response(body, {
-            headers: {
-                "Content-Type": hit.type,
-                "Content-Length": hit.body.length.toString(),
-                "Cache-Control": "public, max-age=3600",
-                "X-Content-Type-Options": "nosniff"
-            }
-        });
-    }
+    if (hit && hit.expires > Date.now()) return inviaCopertina(res, hit);
 
     try {
         const upstream = await scaricaCopertina(url);
-        if (!upstream.ok) return c.text(`Errore upstream: ${upstream.status}`, 502);
+        if (!upstream.ok) return res.status(502).send(`Errore upstream: ${upstream.status}`);
 
         const type = (upstream.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
-        if (!COVER_TYPES.has(type)) return c.text("Tipo di file non consentito", 415);
+        if (!COVER_TYPES.has(type)) return res.status(415).send("Tipo di file non consentito");
 
         if (Number(upstream.headers.get("content-length") ?? 0) > COVER_MAX_BYTES) {
-            return c.text("Immagine troppo grande", 413);
+            return res.status(413).send("Immagine troppo grande");
         }
 
         const body = await leggiConLimite(upstream, COVER_MAX_BYTES);
-        if (!body) return c.text("Immagine troppo grande", 413);
+        if (!body) return res.status(413).send("Immagine troppo grande");
 
         const entry: CoverEntry = { body, type, expires: Date.now() + COVER_CACHE_TTL_MS };
         if (coverCache.size >= COVER_CACHE_MAX) {
@@ -132,19 +124,10 @@ streamingRouter.get("/cover-proxy", async (c) => {
         }
         coverCache.set(key, entry);
 
-        const responseBody = new ArrayBuffer(entry.body.byteLength);
-        new Uint8Array(responseBody).set(entry.body);
-        return new Response(responseBody, {
-            headers: {
-                "Content-Type": entry.type,
-                "Content-Length": entry.body.length.toString(),
-                "Cache-Control": "public, max-age=3600",
-                "X-Content-Type-Options": "nosniff"
-            }
-        });
+        return inviaCopertina(res, entry);
     } catch (err: any) {
         console.error("cover-proxy:", err.message || err);
-        return c.text("Impossibile scaricare l'immagine", 502);
+        return res.status(502).send("Impossibile scaricare l'immagine");
     }
 });
 
@@ -219,58 +202,140 @@ async function cercaCopertina(artista: string, titolo: string): Promise<string |
     return copertina;
 }
 
-/* Endpoint Stream Audio (Web ReadableStream nativo) */
+/* Request helper con gestione risoluzione DNS e Fallback IP per lo Status */
 
-streamingRouter.get("/streaming_audio", async (c) => {
+async function fetchConRetry(urlStr: string, retries = 3, delayMs = 500): Promise<globalThis.Response> {
+    let lastError: unknown = null;
+    const targetUrl = new URL(urlStr);
+    const originalHost = targetUrl.hostname;
+
+    let targetIp = ip_stream;
     try {
-        const response = await fetch(stream_url, {
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "*/*",
-                "Icy-MetaData": "0"
-            }
-        });
+        const lookup = await dns.lookup(originalHost);
+        targetIp = lookup.address;
+    } catch {
+        console.warn(`[Status Fetch] Impossibile risolvere DNS per ${originalHost}, uso IP di fallback:`, targetIp);
+    }
 
-        if (!response.ok || !response.body) {
-            return c.text("Sorgente radio non pronta", 502);
+    // Ricostruiamo l'URL usando l'IP direttamente per evitare fallimenti fetch DNS
+    targetUrl.hostname = targetIp;
+    const fetchUrl = targetUrl.toString();
+
+    const headers: Record<string, string> = {
+        "Host": originalHost,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*"
+    };
+
+    for (let i = 0; i < retries; i++) {
+        try {
+            const res = await fetch(fetchUrl, {
+                signal: AbortSignal.timeout(5000),
+                headers
+            });
+
+            if (res.ok) return res;
+
+            await res.body?.cancel().catch(() => { });
+            lastError = new Error(`Status HTTP ${res.status}`);
+        } catch (error) {
+            lastError = error;
         }
 
-        const tipoContenuto = response.headers.get("content-type") || "audio/mpeg";
-
-        return new Response(response.body, {
-            status: 200,
-            headers: {
-                "Content-Type": tipoContenuto,
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-            }
-        });
-    } catch (err: any) {
-        console.error("[Streaming Error]:", err.message || err);
-        return c.text("Errore di connessione allo stream audio", 502);
+        if (i < retries - 1) await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
+    throw lastError instanceof Error ? lastError : new Error("Gateway non raggiungibile");
+}
+
+/* Endpoint Stream Audio */
+
+streamingRouter.get("/streaming_audio", async (req: Request, res: Response) => {
+    const parsedUrl = new URL(stream_url);
+    const originalHost = parsedUrl.hostname;
+    const path = parsedUrl.pathname + parsedUrl.search;
+    const port = parsedUrl.port ? parseInt(parsedUrl.port, 10) : 80;
+
+    let targetIp = ip_stream;
+    try {
+        const lookup = await dns.lookup(originalHost);
+        targetIp = lookup.address;
+    } catch {
+        console.warn("[Streaming] Impossibile risolvere DNS, uso IP di fallback:", targetIp);
+    }
+
+    const options: http.RequestOptions = {
+        hostname: targetIp,
+        port: port,
+        path: path,
+        method: "GET",
+        headers: {
+            "Host": originalHost,
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Icy-MetaData": "0",
+            "Connection": "close"
+        }
+    };
+
+    let tentativi = 0;
+    const maxTentativi = 2;
+    let timerRetry: NodeJS.Timeout | null = null;
+
+    function eseguiRichiesta() {
+        if (req.destroyed) return;
+        tentativi++;
+
+        const proxyReq = http.request(options, (streamRes: http.IncomingMessage) => {
+            if (streamRes.statusCode !== 200) {
+                if (tentativi < maxTentativi && !req.destroyed) {
+                    timerRetry = setTimeout(eseguiRichiesta, 500);
+                    return;
+                }
+                if (!res.headersSent) res.status(streamRes.statusCode || 502).send("Sorgente radio non pronta");
+                return;
+            }
+
+            const tipoContenuto = streamRes.headers["content-type"] || "audio/mpeg";
+            res.setHeader("Content-Type", tipoContenuto);
+            res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+
+            pipeline(streamRes, res, (err) => {
+                if (err && !req.destroyed) console.error("Errore nell'inoltro dello stream audio:", err.message);
+                streamRes.destroy();
+                proxyReq.destroy();
+            });
+        });
+
+        proxyReq.on("error", (err: any) => {
+            console.error(`[Tentativo ${tentativi}/${maxTentativi}] Errore Icecast:`, err.code || err.message);
+            if (tentativi < maxTentativi && !req.destroyed && !res.headersSent) timerRetry = setTimeout(eseguiRichiesta, 1000);
+            else if (!res.headersSent) res.status(502).send("Errore di connessione allo stream audio");
+        });
+
+        proxyReq.setTimeout(8000, () => {
+            proxyReq.destroy(new Error("Timeout di connessione con il server Icecast"));
+        });
+
+        proxyReq.end();
+    }
+
+    req.on("close", () => {
+        if (timerRetry) clearTimeout(timerRetry);
+    });
+
+    eseguiRichiesta();
 });
 
 /* Endpoint Status JSON */
 
-streamingRouter.get("/streaming_status", async (c) => {
+streamingRouter.get("/streaming_status", async (_req: Request, res: Response) => {
+    res.setHeader("Content-Type", "application/json");
+
     const now = Date.now();
-    if (cachedStatus && now - lastFetchTime < CACHE_DURATION_MS) {
-        return c.json(cachedStatus);
-    }
+    if (cachedStatus && now - lastFetchTime < CACHE_DURATION_MS) return res.json(cachedStatus);
 
     try {
-        const response = await fetch(status_json_url, {
-            signal: AbortSignal.timeout(5000),
-            headers: {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "application/json, text/plain, */*"
-            }
-        });
-
-        if (!response.ok) {
-            throw new Error(`Status HTTP ${response.status}`);
-        }
-
+        const response = await fetchConRetry(status_json_url, 3, 500);
         const text = await response.text();
 
         let data: any;
@@ -299,10 +364,10 @@ streamingRouter.get("/streaming_status", async (c) => {
         cachedStatus = responseData;
         lastFetchTime = Date.now();
 
-        return c.json(responseData);
+        return res.json(responseData);
     } catch (err: any) {
         console.error("[Status Error]:", err.message || err);
-        if (cachedStatus) return c.json(cachedStatus);
-        return c.json({ error: "Sorgente status non disponibile", details: err.message || err }, 502);
+        if (cachedStatus) return res.json(cachedStatus);
+        return res.status(502).json({ error: "Sorgente status non disponibile", details: err.message || err });
     }
 });
