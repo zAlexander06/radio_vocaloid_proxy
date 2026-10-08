@@ -3,13 +3,16 @@ import path from "node:path";
 import { streamingRouter } from "./streaming.js";
 
 export const app = express();
-const port = process.env.PORT || 6767;
-
-const publicPath = path.resolve(process.cwd(), "public");
 
 app.use(streamingRouter);
 
-if (!process.env.CF_PAGES && !process.env.WORKER) {
+const isLocal = process.env.NODE_ENV !== "production" && !process.env.CF_PAGES;
+console.log(`${(isLocal) ? "è in locale" : "è sulla rete"}`);
+
+if (isLocal) {
+    const port = process.env.PORT || 6767;
+    const publicPath = path.resolve(process.cwd(), "public");
+
     app.use(express.static(publicPath));
 
     app.get(/(.*)/, (req: Request, res: Response) => {
