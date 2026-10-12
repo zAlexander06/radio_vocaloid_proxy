@@ -359,7 +359,7 @@ streamingRouter.get("/audio_metadata", async (_req: Request, res: Response) => {
 
         const copertinaOriginale = await cercaCopertina(artista, titolo);
         const copertinaUrl = copertinaOriginale ? `/cover-proxy?u=${encodeURIComponent(copertinaOriginale)}` : null;
-        const responseData = { ...(data || {}), metaExt: { artista, titolo, copertinaUrl } };
+        const responseData = { ...(data || {}), metaExt: { artista, titolo, copertinaUrl, copertinaOriginale } };
 
         cachedStatus = responseData;
         lastFetchTime = Date.now();
