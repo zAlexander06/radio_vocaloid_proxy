@@ -17,6 +17,8 @@ const cacheCopertine = new Map<string, string | null>();
 const MAX_SEARCH_CACHE_SIZE = 500;
 
 const COVER_ALLOWED_DOMAINS = [
+    "coverartarchive.org",
+    "archive.org",
     "dzcdn.net",
     "deezer.com",
     "mzstatic.com",
@@ -90,6 +92,115 @@ function inviaCopertina(res: Response, e: CoverEntry) {
     return res.end(e.body);
 }
 
+function pulisciTesto(testo: string): string {
+    if (!testo) return "";
+    return testo
+        .replace(/\[.*?\]|\(.*?\)/g, "")
+        .replace(/(feat\.?|ft\.?|featuring).*/i, "")
+        .trim();
+}
+
+function normalizzaConfronto(testo: string): string {
+    if (!testo) return "";
+    return testo
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9\s]/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+async function fetchConTimeout(url: string, options: RequestInit = {}, timeoutMs = 5000): Promise<globalThis.Response> {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+        const response = await fetch(url, {
+            ...options,
+            signal: controller.signal
+        });
+        clearTimeout(id);
+        return response;
+    } catch (error) {
+        clearTimeout(id);
+        throw error;
+    }
+}
+
+async function cercaCoverArtRelease(releaseId: string): Promise<string | null> {
+    if (!releaseId) return null;
+
+    try {
+        const url = `https://coverartarchive.org/release/${encodeURIComponent(releaseId)}`;
+        const ris = await fetchConTimeout(url, {}, 4000);
+        if (!ris.ok) return null;
+
+        const data: any = await ris.json();
+        const images = Array.isArray(data?.images) ? data.images : [];
+        if (!images.length) return null;
+
+        const frontImage = images.find((img: any) => img?.front) || images.find((img: any) => img?.types?.includes("Front")) || images[0];
+        const thumbs = frontImage?.thumbnails;
+        return thumbs?.['1200'] ?? thumbs?.['500'] ?? thumbs?.['250'] ?? frontImage?.image ?? null;
+    }
+    catch (err) {
+        console.error(`Errore CoverArt Archive: ${err}`);
+        return null;
+    }
+}
+
+function calcolaPunteggioMusicBrainz(recording: any, artista: string, titolo: string): number {
+    const artistaRichiesto = normalizzaConfronto(artista);
+    const titoloRichiesto = normalizzaConfronto(titolo);
+    const titoloMB = normalizzaConfronto(recording?.title ?? "");
+
+    let punteggio = 0;
+    if (titoloMB === titoloRichiesto) punteggio += 60;
+    else if (titoloMB.includes(titoloRichiesto) || titoloRichiesto.includes(titoloMB)) punteggio += 40;
+
+    const artistCredits = Array.isArray(recording?.["artist-credit"]) ? recording["artist-credit"] : [];
+    const artistaMB = normalizzaConfronto(artistCredits.map((c: any) => c?.name ?? c?.artist?.name ?? "").join(" "));
+
+    if (artistaMB === artistaRichiesto) punteggio += 40;
+    else if (artistaMB.includes(artistaRichiesto) || artistaRichiesto.includes(artistaMB)) punteggio += 25;
+
+    const mbScore = Number(recording?.score);
+    if (!Number.isNaN(mbScore)) punteggio += mbScore * 0.1;
+
+    return punteggio;
+}
+
+async function cercaSuMusicBrainz(artista: string, titolo: string): Promise<string | null> {
+    if (!artista || !titolo) return null;
+
+    const query = encodeURIComponent(`artist:"${artista}" AND recording:"${titolo}"`);
+    const mbUrl = `https://musicbrainz.org/ws/2/recording/?query=${query}&fmt=json&limit=10`;
+
+    try {
+        const ris = await fetchConTimeout(mbUrl, {
+            headers: { "User-Agent": "SystemOS-Radio/1.0 (info@systemos.local)" }
+        }, 5000);
+        if (!ris.ok) return null;
+
+        const data: any = await ris.json();
+        const recordings = Array.isArray(data?.recordings) ? data.recordings : [];
+        if (!recordings.length) return null;
+
+        const migliorRecord = recordings.sort((a: any, b: any) =>
+            calcolaPunteggioMusicBrainz(b, artista, titolo) - calcolaPunteggioMusicBrainz(a, artista, titolo)
+        )[0];
+
+        const releaseId = migliorRecord?.releases?.[0]?.id;
+        if (!releaseId) return null;
+
+        return await cercaCoverArtRelease(releaseId);
+    }
+    catch (err) {
+        console.warn(`Errore MusicBrainz: ${err}`);
+        return null;
+    }
+}
+
 streamingRouter.get("/cover-proxy", async (req: Request, res: Response) => {
     const raw = req.query.u;
     if (typeof raw !== "string" || raw.length > 2048) return res.status(400).send("Parametro 'u' non valido");
@@ -134,65 +245,52 @@ streamingRouter.get("/cover-proxy", async (req: Request, res: Response) => {
 /* Ricerca copertine via API esterne */
 
 async function cercaCopertina(artista: string, titolo: string): Promise<string | null> {
-    if (!artista || !titolo || artista.toLowerCase() === "in onda") return null;
+    if (!artista || !titolo) return null;
 
-    const cacheKey = `${artista.toLowerCase()}|${titolo.toLowerCase()}`;
+    const artPulito = pulisciTesto(artista).trim() || "";
+    const titPulito = pulisciTesto(titolo).trim() || "";
+
+    const artLower = artPulito.toLowerCase();
+    if (["in onda", "unknown"].includes(artLower)) return null;
+
+    const cacheKey = `${artLower}|${titPulito.toLowerCase()}`;
     if (cacheCopertine.has(cacheKey)) return cacheCopertine.get(cacheKey) ?? null;
 
     let copertina: string | null = null;
-    const queryTesto = `${artista} ${titolo}`.trim();
 
-    // Deezer
+    // 1. MusicBrainz (con CoverArt Archive)
     try {
-        const query = encodeURIComponent(`artist:"${artista}" track:"${titolo}"`);
-        const res = await fetch(`https://api.deezer.com/search?q=${query}&limit=1`, { signal: AbortSignal.timeout(3000) });
-        if (res.ok) {
-            const data: any = await res.json();
-            copertina = data?.data?.[0]?.album?.cover_xl || data?.data?.[0]?.album?.cover_big || null;
-        }
-    } catch { console.warn("Deezer fallito, passo a iTunes..."); }
+        copertina = await cercaSuMusicBrainz(artPulito, titPulito);
+    } catch {
+        console.warn("MusicBrainz fallito, passo a Deezer...");
+    }
 
-    // iTunes
+    // 2. Deezer (Fallback)
     if (!copertina) {
         try {
-            const term = encodeURIComponent(queryTesto);
+            const query = encodeURIComponent(`artist:"${artPulito}" track:"${titPulito}"`);
+            const res = await fetch(`https://api.deezer.com/search?q=${query}&limit=1`, { signal: AbortSignal.timeout(3000) });
+            if (res.ok) {
+                const data: any = await res.json();
+                copertina = data?.data?.[0]?.album?.cover_xl || data?.data?.[0]?.album?.cover_big || null;
+            }
+        } catch { console.warn("Deezer fallito, passo a iTunes..."); }
+    }
+
+    // 3. iTunes (Fallback)
+    if (!copertina) {
+        try {
+            const term = encodeURIComponent(`${artPulito} ${titPulito}`.trim());
             const res = await fetch(`https://itunes.apple.com/search?term=${term}&entity=song&attribute=songTerm&limit=1`, { signal: AbortSignal.timeout(3000) });
             if (res.ok) {
                 const data: any = await res.json();
                 const rawUrl = data?.results?.[0]?.artworkUrl100;
                 if (rawUrl) copertina = rawUrl.replace("100x100bb", "600x600bb");
             }
-        } catch { console.warn("iTunes fallito, passo a Spotify OEmbed..."); }
+        } catch { console.warn("iTunes fallito, passo a Spotify..."); }
     }
 
-    // Spotify
-    if (!copertina) {
-        try {
-            const term = encodeURIComponent(queryTesto);
-            const res = await fetch(`https://open.spotify.com/oembed?url=https://open.spotify.com/search/${term}`, { signal: AbortSignal.timeout(3000) });
-            if (res.ok) {
-                const data: any = await res.json();
-                copertina = data?.thumbnail_url || null;
-            }
-        } catch { console.warn("Spotify OEmbed non ha trovato copertine."); }
-    }
-
-    // SoundCloud
-    if (!copertina) {
-        try {
-            const term = encodeURIComponent(queryTesto);
-            const targetUrl = `https://soundcloud.com/search?q=${term}`;
-            const res = await fetch(`https://soundcloud.com/oembed?url=${encodeURIComponent(targetUrl)}&format=json`, { signal: AbortSignal.timeout(3000) });
-            if (res.ok) {
-                const data: any = await res.json();
-                const rawUrl = data?.thumbnail_url;
-                if (rawUrl) copertina = rawUrl.replace("-large.", "-t500x500.");
-            }
-        } catch {
-            console.warn("SoundCloud OEmbed non ha trovato copertine.");
-        }
-    }
-
+    // Gestione cache con limite dimensione
     if (cacheCopertine.size >= MAX_SEARCH_CACHE_SIZE) {
         const oldestKey = cacheCopertine.keys().next().value;
         if (oldestKey !== undefined) cacheCopertine.delete(oldestKey);
