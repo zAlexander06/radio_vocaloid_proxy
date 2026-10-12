@@ -346,10 +346,10 @@ streamingRouter.get("/audio_metadata", async (_req: Request, res: Response) => {
         }
 
         const sources = data?.icestats?.source;
-        let source = Array.isArray(sources) ? sources[0] : sources;
+        let source = Array.isArray(sources) ? sources.find((s: any) => s.title || s.artist || s.yp_currently_playing) || sources[1] || sources[0] : sources;
 
+        let titolo = source?.title || sources?.yp_currently_playing || "";
         let artista = source?.artist || "In onda";
-        let titolo = source?.title || "";
 
         if (!source?.artist && titolo.includes(" - ")) {
             const parti = titolo.split(" - ");
